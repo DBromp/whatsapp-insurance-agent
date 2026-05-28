@@ -23,8 +23,9 @@
 from pyspark.sql import functions as F
 import sys
 
-# Make `src/` importable when this runs as a Databricks notebook from a repo.
-sys.path.insert(0, "/Workspace/Repos/" + spark.conf.get("spark.databricks.notebook.path", "").split("/")[2] + "/whatsapp-insurance-agent")
+# Make `src/` importable when this runs as a Databricks notebook.
+notebook_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
+sys.path.insert(0, "/Workspace" + "/".join(notebook_path.split("/")[:-2]))
 
 from src.schema import BRONZE_COLUMNS, build_bronze_schema, validate_schema_columns
 from src.profiling import profile_dataframe, write_audit_record

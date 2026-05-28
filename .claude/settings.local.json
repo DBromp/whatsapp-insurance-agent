@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\daniel.brom\\\\Documents\\\\Claude\\\\Projects\\\\Full AI System\\\\whatsapp-insurance-agent\" -Force | Select-Object Name, @{Name=\"Type\";Expression={if\\($_.PSIsContainer\\){\"DIR\"}else{\"FILE\"}}} | Format-Table -AutoSize)",
+      "Read(//c/Users/daniel.brom/.claude/projects/c--Users-daniel-brom-Documents-Claude-Projects-Full-AI-System-whatsapp-insurance-agent/memory/**)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\daniel.brom\\.claude\\projects\\c--Users-daniel-brom-Documents-Claude-Projects-Full-AI-System-whatsapp-insurance-agent\\memory"
+    ]
+  }
+}

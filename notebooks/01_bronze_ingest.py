@@ -39,7 +39,8 @@ TABLE = f"{CATALOG}.{BRONZE_SCHEMA_NAME}.messages"
 SOURCE_PATH = f"/Volumes/{CATALOG}/{BRONZE_SCHEMA_NAME}/raw_files/conversations/"
 CHECKPOINT_PATH = f"/Volumes/{CATALOG}/{BRONZE_SCHEMA_NAME}/_checkpoints/messages/"
 
-RUN_ID = dbutils.notebook.entry_point.getDbutils().notebook().getContext().jobRunId().getOrElse("local")
+_job_run = dbutils.notebook.entry_point.getDbutils().notebook().getContext().jobRunId()
+RUN_ID = str(_job_run.get()) if _job_run.isDefined() else "local"
 
 # COMMAND ----------
 

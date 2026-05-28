@@ -11,6 +11,7 @@ import json
 from typing import Any
 
 from pyspark.sql import DataFrame, functions as F
+from pyspark.sql.types import StringType
 
 
 def profile_dataframe(df: DataFrame, sample_n: int | None = None) -> dict[str, Any]:
@@ -28,8 +29,14 @@ def profile_dataframe(df: DataFrame, sample_n: int | None = None) -> dict[str, A
     row_count = df.count()
     columns = sample.columns
 
+    def _null_or_empty(col_name: str):
+        cond = F.col(col_name).isNull()
+        if isinstance(sample.schema[col_name].dataType, StringType):
+            cond = cond | (F.col(col_name) == "")
+        return cond
+
     null_rates = {
-        c: sample.filter(F.col(c).isNull() | (F.col(c) == "")).count() / max(sample.count(), 1)
+        c: sample.filter(_null_or_empty(c)).count() / max(sample.count(), 1)
         for c in columns
     }
 

@@ -15,7 +15,7 @@ Non-obvious design tradeoffs captured during the 4-day build. Each ADR follows t
 
 **Consequences.**
 - Serverless-only compute — no all-purpose clusters in Free Edition.
-- Monthly compute hours capped. We aggressively cache LLM extractions to Silver so reruns are cheap.
+- Monthly compute hours capped. We aggressively cache LLM extractions to Silver so reruns are cheap (see ADR-006).
 - We can demonstrate Auto Loader, Unity Catalog, Volumes, Delta Lake, and Workflows — every "killer" Databricks-idiomatic feature.
 
 ---
@@ -27,7 +27,7 @@ Non-obvious design tradeoffs captured during the 4-day build. Each ADR follows t
 
 **Context.** We need an LLM for unstructured text extraction (vehicle data, competitors, objections, claim history) over ~153k messages, plus reasoning for the supervising agent. The LLM must be free-or-near-free, support structured output, handle PT-BR well, and have generous-enough rate limits to extract thousands of conversations per day.
 
-**Decision.** Google Gemini 2.5 Flash via the `google-genai` SDK. Free-tier quotas (15 RPM, ~1500 RPD) are sufficient when paired with batched calls (~50 items per request) and persistent caching of extraction results.
+**Decision.** Google Gemini 2.5 Flash via the `google-genai` SDK. Free-tier quotas (15 RPM, ~1500 RPD) are sufficient when paired with batched calls (~50 items per request) and persistent hash-based caching (ADR-006).
 
 **Consequences.**
 - We carry one external dependency (`google-genai`).
@@ -57,7 +57,7 @@ Non-obvious design tradeoffs captured during the 4-day build. Each ADR follows t
 **Date:** Day 0
 **Status:** Accepted
 
-**Context.** Choice between LangGraph (standard agentic framework) and a custom Python control loop.
+**Context.** Choice between LangGraph (standard agentic framework) and a custom Python control loop. We surveyed [`namastexlabs/agui-benchmark`](https://github.com/namastexlabs/agui-benchmark) which benchmarks 26 agent frameworks on the AG-UI protocol — a useful reference point given NMSTX's familiarity with the space.
 
 **Decision.** Custom Python loop. The agent's flow — poll → diagnose → patch or escalate — is essentially linear with retries. A graph DSL adds abstraction without solving anything we don't already need to solve.
 
@@ -65,6 +65,7 @@ Non-obvious design tradeoffs captured during the 4-day build. Each ADR follows t
 - Smaller dependency surface.
 - Full control over retry, state, and idempotency semantics.
 - We document the state machine explicitly in `agent/supervisor.py` instead of inferring it from a graph definition.
+- The supervisor's control API (`pause`, `resume`, `inspect_failures`, `replay_run`) is structured to be wrappable as an MCP server later (see Roadmap in README).
 
 ---
 
@@ -82,3 +83,18 @@ Non-obvious design tradeoffs captured during the 4-day build. Each ADR follows t
 - Auto Loader's `schemaEvolutionMode = "rescue"` captures drifted columns into `_rescued_data` for forensic visibility.
 
 ---
+
+## ADR-006 — Hash-based caching for LLM extraction
+
+**Date:** Day 1
+**Status:** Accepted
+
+**Context.** Silver's LLM extraction (vehicle data, competitors, objection categories) is the most expensive step in the pipeline — both in Gemini free-tier quota burn and wall-clock time. Naïvely re-running extraction on every Silver refresh would either blow the 1,500 RPD quota inside an hour or force us to a paid tier. The pattern is well-established in NMSTX's own [`automagik-hive`](https://github.com/namastexlabs/automagik-hive) Smart CSV RAG (cited as ~450× faster reloads, 99% cost savings).
+
+**Decision.** Persistent hash-keyed cache in `silver._extraction_cache` keyed by `(md5_of_concatenated_message_bodies, prompt_version)`. Every Silver run computes the hash per conversation; if the hash matches what's already cached, we skip the Gemini call entirely and read the cached extraction. New conversations and changed conversations get a fresh call.
+
+**Consequences.**
+- First full run touches all 15,000 conversations (~5 hours under free-tier limits with batching).
+- Incremental runs only touch new/changed conversations — sub-minute typical refresh.
+- `prompt_version` in the cache key means changing the extraction prompt triggers a full re-extract on next run (intentional).
+- Cache table is part of the Silver schema so it lives in Unity Catalog, with all the lineage and access controls that come with it.

@@ -11,7 +11,7 @@ Raw `.parquet` ingest into Delta — append-only, no transformations beyond sche
 
 ## Silver
 
-Cleaned, normalized, PII-masked, with extracted entities. Two tables.
+Cleaned, normalized, PII-masked, with extracted entities. Three tables (two user-facing + one cache).
 
 ### `silver.messages` (one row per message)
 
@@ -30,14 +30,29 @@ Rollup from `silver.messages`:
 - `outcome` (deterministic — same across all messages)
 - `n_messages`, `n_inbound`, `n_outbound`, `first_ts`, `last_ts`, `duration_minutes`
 - `length_bucket` (cold / short / medium / long per dictionary buckets)
-- LLM-extracted: `vehicle_brand`, `vehicle_model`, `vehicle_year`, `competitors_mentioned[]`, `had_prior_sinistro` (bool), `objection_category` (price / coverage / trust / timing / none)
+- LLM-extracted (via cache, see below): `vehicle_brand`, `vehicle_model`, `vehicle_year`, `competitors_mentioned[]`, `had_prior_sinistro` (bool), `objection_category` (price / coverage / trust / timing / none)
 - `state`, `city`, `lead_source`, `device`
+
+### `silver._extraction_cache` (hash-keyed LLM result cache)
+
+Schema: `(conversation_id, body_hash, prompt_version, extracted_json, extracted_at)`
+
+How it works on every Silver run:
+1. For each conversation in scope, compute `body_hash = md5(concat(sorted(message_bodies)))`
+2. Look up `(conversation_id, body_hash, prompt_version)` in the cache
+3. If hit → use cached `extracted_json`, skip Gemini call
+4. If miss → call Gemini, write the new row to the cache, use the fresh result
+
+Why this matters:
+- Free-tier Gemini limits (~1500 RPD) would blow up on naïve re-runs
+- Pattern mirrors NMSTX's own `automagik-hive` Smart CSV RAG (cited ~450× faster reloads, ~99% cost savings)
+- `prompt_version` in the key means changing the extraction prompt triggers a deliberate full re-extract
 
 LLM extraction batched ~50 conversations per Gemini call to stay under rate limits.
 
 ## Gold
 
-Analytical layer — eight tables, one per insight (see `gold_insights.md`). All Gold tables refresh incrementally via Delta Live Tables or a scheduled Workflow that watches Silver's `_silver_updated_at` watermark.
+Analytical layer — eight tables, one per insight (see `gold_insights.md`). All Gold tables refresh incrementally via a scheduled Workflow that watches Silver's `_silver_updated_at` watermark.
 
 - `gold.agent_scorecard`
 - `gold.funnel_stages`

@@ -3,31 +3,54 @@
 Used by the data engineer during development and by the supervising agent at runtime
 to detect anomalies in incoming data (sudden null spikes, new enum values, distribution
 drift, etc.).
+
+PySpark is imported lazily inside the functions that need it so that pure-Python
+helpers (`detect_anomalies`) can be imported in environments without pyspark.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from pyspark.sql import DataFrame, functions as F
-from pyspark.sql.types import StringType
+if TYPE_CHECKING:
+    from pyspark.sql import DataFrame
 
 
-def profile_dataframe(df: DataFrame, sample_n: int | None = None) -> dict[str, Any]:
+def profile_dataframe(df: "DataFrame", sample_n: int | None = None) -> dict[str, Any]:
     """Return a profile dict with shape, null rates, distinct counts, and basic stats.
 
     Args:
         df: Spark DataFrame to profile.
         sample_n: Optional row sample size for distinct-count computation.
+                  Ignored if the DataFrame is empty.
 
     Returns:
         Dict with keys: row_count, columns, null_rates, distinct_counts.
+        On an empty DataFrame, null_rates and distinct_counts are still returned
+        but populated with zeros so the agent\'s downstream comparisons keep working.
     """
-    sample = df.sample(fraction=min(1.0, sample_n / df.count())) if sample_n else df
+    from pyspark.sql import functions as F
+    from pyspark.sql.types import StringType
 
     row_count = df.count()
-    columns = sample.columns
+    columns = df.columns
+
+    # Empty-DataFrame short-circuit (prevents ZeroDivisionError in the sample branch).
+    if row_count == 0:
+        return {
+            "row_count": 0,
+            "columns": columns,
+            "null_rates": {c: 0.0 for c in columns},
+            "distinct_counts": {c: 0 for c in columns},
+        }
+
+    if sample_n and sample_n < row_count:
+        sample = df.sample(fraction=sample_n / row_count, seed=42)
+        sample_count = sample_n
+    else:
+        sample = df
+        sample_count = row_count
 
     def _null_or_empty(col_name: str):
         cond = F.col(col_name).isNull()
@@ -36,15 +59,15 @@ def profile_dataframe(df: DataFrame, sample_n: int | None = None) -> dict[str, A
         return cond
 
     null_rates = {
-        c: sample.filter(_null_or_empty(c)).count() / max(sample.count(), 1)
-        for c in columns
+        c: sample.filter(_null_or_empty(c)).count() / max(sample_count, 1)
+        for c in sample.columns
     }
 
-    distinct_counts = {c: sample.select(c).distinct().count() for c in columns}
+    distinct_counts = {c: sample.select(c).distinct().count() for c in sample.columns}
 
     return {
         "row_count": row_count,
-        "columns": columns,
+        "columns": sample.columns,
         "null_rates": null_rates,
         "distinct_counts": distinct_counts,
     }
@@ -62,6 +85,8 @@ def detect_anomalies(
       - null_rate for a column drifts by more than `null_rate_tolerance` (absolute)
       - distinct_count drifts by more than `distinct_count_tolerance` (relative)
       - a column is missing or unexpectedly added
+
+    Pure Python — no pyspark dependency.
     """
     anomalies: list[dict[str, Any]] = []
 
@@ -115,6 +140,8 @@ def write_audit_record(
     status: str,
 ) -> None:
     """Persist an audit record so the agent can read it back during incident triage."""
+    from pyspark.sql import functions as F
+
     record = [
         (
             job_run_id,

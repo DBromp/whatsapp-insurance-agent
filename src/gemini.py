@@ -63,18 +63,28 @@ class ExtractionResult(BaseModel):
     competitors_mentioned: list[str] = Field(
         default_factory=list,
         description=(
-            "Distinct competitor brand names mentioned by either side. "
-            "Pick from: porto seguro, azul seguros, bradesco seguros, sulamérica, "
-            "liberty, allianz, tokio marine, mapfre, hdi."
+        "Canonical competitor brand names mentioned by either side."
+        "Allowed values (exhaustive): porto seguro, azul seguros, bradesco seguros."
+        "sulamérica, liberty, allianz, tokio marine, mapfre, hdi."
+        "List each at most once."
+        "If a competitor outside this list is mentioned, omit it — do not map to the closest match."
         ),
     )
     had_prior_sinistro: bool = Field(
         default=False,
-        description="True if the lead mentioned a previous claim/accident (sinistro).",
+        description=("True only if the lead affirms a prior claim or accident."
+        "Explicit denials ('não', 'nunca', 'nenhum') → False even when the topic was raised."
+        "Topic never raised → False.",
+        ),
     )
     objection_category: ObjectionCategory = Field(
         default="none",
-        description="Coarse Silver-level objection signal; refined into 7 buckets in Gold.",
+        description=(
+        "Pick the single dominant objection."
+        "Use none' only when the lead raises no objection at all (e.g. fast-close or ghost)."
+        "If there is any objection signal, pick the closest of price/coverage/trust/timing."
+        "Do not use 'none' as a fallback for unclear cases."
+        ),
     )
 
 
@@ -149,6 +159,8 @@ _SYSTEM_PROMPT = (
     "- objection_category is one of: price, coverage, trust, timing, none.\n"
     "- Return one result per conversation, preserving input order, with the same "
     "conversation_id."
+    "- If a message body is a placeholder like '[áudio]', '[imagem]', '[sticker]', or '[localização]', treat it as non-informative and do not extract from the marker text itself." 
+
 )
 
 

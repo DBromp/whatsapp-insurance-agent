@@ -18,6 +18,7 @@ CREATE SCHEMA IF NOT EXISTS gold;
 
 ```sql
 CREATE VOLUME IF NOT EXISTS nmstx_whatsapp_pipeline.bronze.raw_files;
+CREATE VOLUME IF NOT EXISTS nmstx_whatsapp_pipeline.bronze._checkpoints;
 ```
 
 Then upload `conversations_bronze.parquet` to:
@@ -26,6 +27,10 @@ Then upload `conversations_bronze.parquet` to:
 ```
 
 via the Catalog Explorer → Volumes → Upload to this volume.
+
+The `_checkpoints` Volume backs Auto Loader's streaming checkpoint at
+`/Volumes/nmstx_whatsapp_pipeline/bronze/_checkpoints/messages/` — required by
+`notebooks/01_bronze_ingest.py`.
 
 ## 3. Create the secret scope
 

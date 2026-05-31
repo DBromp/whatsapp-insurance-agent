@@ -38,3 +38,4 @@ metastore_db/
 *.parquet
 *.csv
 !tests/fixtures/**
+.claude/settings.local.json

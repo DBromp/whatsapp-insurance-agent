@@ -10,7 +10,7 @@
 
 | # | Fix | Where it lands |
 |---|---|---|
-| 1 | Renamed `mask_name(phone, salt)` → `name_token_from_phone(phone, salt)` — the original signature implied it took a name, but it takes a phone. Silent footgun. | File 1 public API + pair-programming table |
+| 1 | Renamed `mask_name(phone, salt)` → `name_token_from_phone(phone, salt)` — the original signature implied it took a name, but it takes a phone. Silent footgun. | File 1 public API + build-order table |
 | 2 | `body_hash` orders messages by timestamp, not alphabetical sort. Alphabetical sort would mask real semantic re-ordering. | File 3 hash helper |
 | 3 | Added explicit `mode` widget (`incremental` vs `full_refresh`). Without it, the first run would skip yesterday's 153k Bronze rows. | File 4 Stage 1 + new "Run modes" section |
 | 4 | Called out the two-stage objection refinement (Silver = 5-value coarse signal; Gold = 7-bucket taxonomy on Day 3). Avoids re-extraction on Day 3. | File 3 Pydantic model section |
@@ -31,26 +31,22 @@ Day 1 shipped Bronze end-to-end: 153,228 messages live in `nmstx_whatsapp_pipeli
 
 **Day 2 Definition of Done (per PROJECT_PLAN.md):** `silver.messages` and `silver.conversations` populated. Zero PII visible in either table. LLM extraction cached so reruns are cheap. Silver job runs on a 15-min schedule.
 
-Dual goal: ship a working Silver layer **and** advance Daniel\'s Python fluency. Per `feedback_teach_mode`, each file is taught before/after writing, one at a time. Per Daniel\'s confirmation: **pair-program `src/pii.py`** (alternating Claude / Daniel function-by-function), and **include unit tests** in `tests/test_pii.py`.
+Include unit tests in `tests/test_pii.py` covering the cases listed under File 2.
 
 ## Sequence
 
 Six checkpoints in dependency order. Each is a stop-and-review point. Subsequent steps only start after Daniel signs off on the previous one. The numbering matches PROJECT_PLAN.md tasks 2.1–2.8.
 
-1. `src/pii.py` — Brazilian PII masking. Pure Python. Pair-programmed. *(task 2.1)*
+1. `src/pii.py` — Brazilian PII masking. Pure Python. *(task 2.1)*
 2. `tests/test_pii.py` — pytest assertions, ~30 cases per PROJECT_PLAN.md. *(task 2.2)*
 3. `src/gemini.py` — Gemini extraction client + Pydantic models + hash helper. *(task 2.4)*
 4. `notebooks/02_silver_transform.py` — PySpark transform combining 2.3, 2.5, 2.6 in one notebook. *(tasks 2.3 + 2.5 + 2.6)*
 5. Idempotency check — re-run Silver, confirm zero net new rows (MERGE invariant). *(task 2.7)*
 6. Wire `silver_transform` Databricks Job + cron schedule `*/15 * * * *`. *(task 2.8)*
 
-Files 3 and 4 default to Claude-writes + teach-walkthrough unless Daniel switches to pair mode mid-stream.
-
 ---
 
 ## File 1: `src/pii.py`
-
-**Concepts taught:** regex (the `re` module), module-level constants, deterministic hashing (`hashlib`), string manipulation, type hints in anger, helper-vs-public function split, dimension-preserving design.
 
 **Public API (one function per Brazilian PII pattern):**
 
@@ -85,26 +81,22 @@ def mask_message_body(body: str, salt: str) -> str: ...   # orchestrates all reg
 - Google-style docstrings matching `src/profiling.py:17`.
 - No new dependencies — `re` and `hashlib` are stdlib.
 
-**Pair-programming split** (alternating, simplest → trickiest):
+**Build order** (simplest → trickiest, foundation first):
 
-| # | Author | Function | Why this order |
-|---|---|---|---|
-| 1 | Claude | `_deterministic_digits` | Foundation; teaches `hashlib.sha256`, hex chunking, `int(pair, 16) % 10` |
-| 2 | Daniel | `mask_phone` | Direct application of helper #1; gentle first write |
-| 3 | Claude | `name_token_from_phone` | Different output (hex token via `[:8]` slice); teaches that the token comes from the phone, not the name |
-| 4 | Daniel | `mask_cep` | Branching on whether hyphen is present |
-| 5 | Claude | `mask_cpf` | Multiple format variants, normalization step |
-| 6 | Daniel | `mask_email` | `str.split("@")`, simple slicing |
-| 7 | Claude | `mask_license_plate` | Detects Mercosul vs old plate, branches accordingly |
-| 8 | Together | `mask_message_body` | Orchestrates the regexes; integration step |
-
-Daniel writes in his editor; Claude reviews after each Daniel function with line-by-line teaching commentary before moving on.
+| # | Function | Why this order |
+|---|---|---|
+| 1 | `_deterministic_digits` | Foundation — every numeric mask depends on it |
+| 2 | `mask_phone` | Direct application of helper #1 |
+| 3 | `name_token_from_phone` | Different output shape (hex token via `[:8]` slice) |
+| 4 | `mask_cep` | Branching on whether hyphen is present |
+| 5 | `mask_cpf` | Multiple format variants, normalization step |
+| 6 | `mask_email` | `str.split("@")`, simple slicing |
+| 7 | `mask_license_plate` | Detects Mercosul vs old plate, branches accordingly |
+| 8 | `mask_message_body` | Orchestrates the regexes; integration step |
 
 ---
 
 ## File 2: `tests/test_pii.py`
-
-**Concepts taught:** `pytest` test discovery (`test_*` naming), assertion style (plain `assert`), parameterization (`@pytest.mark.parametrize`), test naming as documentation.
 
 **Coverage shape** — per PROJECT_PLAN.md §2.2, **~30 cases including malformed/edge inputs, idempotency, and dimension preservation**. For each masker:
 
@@ -119,8 +111,6 @@ Mirror `tests/test_schema.py` style: plain functions, no `unittest.TestCase`, no
 ---
 
 ## File 3: `src/gemini.py`
-
-**Concepts taught:** classes with `__init__`, Pydantic `BaseModel` for typed output, decorators (`@retry` from `tenacity`), JSON parsing, batching pattern, structured prompting.
 
 **Public API:**
 
@@ -204,8 +194,6 @@ def body_hash(messages: list[tuple[str, str]]) -> str:
 ---
 
 ## File 4: `notebooks/02_silver_transform.py`
-
-**Concepts taught:** PySpark `withColumn` + `selectExpr`, JSON parsing with `from_json`, Spark UDFs vs `pandas_udf`, Delta `MERGE INTO`, partition strategy, integration of pure-Python helpers into Spark jobs via UDFs.
 
 **Reuses Day 1 verbatim (per reuse map):**
 

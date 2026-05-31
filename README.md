@@ -8,6 +8,13 @@ Built for the NMSTX Data & AI Engineering technical assessment. The agent create
 
 The brief asks for an AI agent that builds and manages a transformation pipeline — not a one-off analysis script. This repo demonstrates the difference: persistent infrastructure (Databricks Workflows, Auto Loader, Delta MERGE patterns) wrapped by a supervising Python agent that monitors job runs, diagnoses failures via Gemini, and either auto-applies safe patches or escalates with structured alerts.
 
+| One-off analysis | Persistent pipeline (what this is) |
+|---|---|
+| Notebook produces a result, then exits | Workflows run on schedule; new data flows through automatically |
+| Failures = human reads stack trace | Failures = agent reads stack trace, diagnoses via Gemini, patches or escalates |
+| Gold table = a notebook output | Gold tables = Delta tables that incrementally refresh from Silver |
+| Tomorrow's data = manual rerun | Tomorrow's data = lands in Volume, propagates end-to-end within 30 min |
+
 ## Architecture
 
 ```
@@ -15,18 +22,18 @@ The brief asks for an AI agent that builds and manages a transformation pipeline
                     │  Volume        │  parquet files land here
                     │  (Unity Cat.)  │
                     └────────┬───────┘
-                             │ Auto Loader
+                             │ Auto Loader (every 15 min)
                              ▼
                     ┌────────────────┐
                     │  BRONZE        │  append-only, schema-enforced
-                    │  bronze.messages│
+                    │  bronze.messages
                     └────────┬───────┘
-                             │ PySpark transforms + Gemini extraction
+                             │ PySpark + Gemini extraction (hash-cached)
                              ▼
                     ┌────────────────┐
                     │  SILVER        │  cleaned, PII-masked, enriched
-                    │  silver.messages│
-                    │  silver.conversations│
+                    │  silver.messages
+                    │  silver.conversations
                     └────────┬───────┘
                              │ Aggregations + LLM classification
                              ▼
@@ -50,6 +57,7 @@ Raw WhatsApp messages from Auto Loader. Schema enforced. Append-only. Partitione
 ### Silver
 - `silver.messages` — parsed metadata, masked PII, deduped
 - `silver.conversations` — conversation-level rollup with LLM-extracted vehicle, competitor, and objection signals
+- `silver._extraction_cache` — hash-keyed cache of Gemini extraction results (see ADR-006)
 - `silver._pii_vault` — access-restricted token map
 
 ### Gold
@@ -92,6 +100,18 @@ pytest
 # Deploy to Databricks
 # See docs/deploy.md for catalog/Volume/secrets setup
 ```
+
+## Development
+
+| Target | What |
+|---|---|
+| `make install` | install deps via pip |
+| `make install-uv` | install deps via uv (faster) |
+| `make test` | run the test suite |
+| `make dev` | run tests in watch mode |
+| `make lint` | ruff check |
+| `make format` | ruff format |
+| `make clean` | remove caches |
 
 ## Documentation
 

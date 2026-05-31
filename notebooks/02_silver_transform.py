@@ -1,4 +1,13 @@
 # Databricks notebook source
+# Databricks notebook source
+# MAGIC %pip install google-genai>=0.5.0 pydantic>=2.5.0 tenacity>=8.2.0
+
+# COMMAND ----------
+
+dbutils.library.restartPython()
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC # Silver Transformation
 # MAGIC

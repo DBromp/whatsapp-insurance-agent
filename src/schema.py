@@ -102,8 +102,21 @@ def validate_schema_columns(actual):
     return violations
 
 
-def validate_enum_values(df, column, allowed):
-    """Return list of unexpected values in `column`. Empty = valid."""
-    distinct = {row[column] for row in df.select(column).distinct().collect()}
-    unexpected = distinct - allowed - {None}
-    return sorted(unexpected)
+def validate_enum_values(df, column, allowed, max_violations=20):
+    """Return up to ``max_violations`` unexpected values in ``column``.
+
+    Empty list = valid. Filters out allowed values on the Spark side *before*
+    the ``limit`` so the bounded collect cannot hide violations behind an
+    arbitrary sample of allowed values (which would produce a false-negative
+    empty result on a high-cardinality column).
+    """
+    from pyspark.sql import functions as F
+
+    unexpected_df = (
+        df.select(column)
+        .distinct()
+        .filter(F.col(column).isNotNull())
+        .filter(~F.col(column).isin(list(allowed)))
+        .limit(max_violations)
+    )
+    return sorted(r[column] for r in unexpected_df.collect())

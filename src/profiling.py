@@ -18,25 +18,50 @@ if TYPE_CHECKING:
 
 
 def profile_dataframe(df: "DataFrame", sample_n: int | None = None) -> dict[str, Any]:
-    """Return a profile dict with shape, null rates, distinct counts, and basic stats.
+    """One-pass profile of a Spark DataFrame.
+
+    Returns shape + null rates + (approximate) distinct counts in a single ``agg``
+    over the input. Trades exact distinct counts for HyperLogLog approximation
+    (default ``rsd=0.05``) so the call stays cheap on multi-million-row
+    Silver/Gold tables.
+
+    The previous implementation triggered ~1 + 2N full scans (one ``count`` plus
+    a ``filter().count()`` and a ``distinct().count()`` per column). At Bronze
+    scale (153k rows) that's harmless; at Gold scale it bites.
+
+    ``sample_n`` is accepted for backward compatibility but currently ignored —
+    ``approx_count_distinct`` is fast enough on full tables that sampling adds
+    complexity without proportional benefit. Re-add as a deterministic Bernoulli
+    sample if a future caller needs it.
 
     Args:
         df: Spark DataFrame to profile.
-        sample_n: Optional row sample size for distinct-count computation.
-                  Ignored if the DataFrame is empty.
+        sample_n: Ignored (kept for caller compatibility).
 
     Returns:
-        Dict with keys: row_count, columns, null_rates, distinct_counts.
-        On an empty DataFrame, null_rates and distinct_counts are still returned
-        but populated with zeros so the agent\'s downstream comparisons keep working.
+        Dict with keys: ``row_count``, ``columns``, ``null_rates``,
+        ``distinct_counts``. Empty DataFrames return a zero-shape dict so the
+        agent's downstream comparisons keep working without special casing.
     """
     from pyspark.sql import functions as F
     from pyspark.sql.types import StringType
 
-    row_count = df.count()
     columns = df.columns
 
-    # Empty-DataFrame short-circuit (prevents ZeroDivisionError in the sample branch).
+    # Build per-column agg expressions in a single pass.
+    agg_exprs = [F.count(F.lit(1)).alias("__row_count__")]
+    for c in columns:
+        is_string = isinstance(df.schema[c].dataType, StringType)
+        if is_string:
+            null_cond = F.col(c).isNull() | (F.col(c) == "")
+        else:
+            null_cond = F.col(c).isNull()
+        agg_exprs.append(F.sum(F.when(null_cond, 1).otherwise(0)).alias(f"__null_{c}__"))
+        agg_exprs.append(F.approx_count_distinct(F.col(c), rsd=0.05).alias(f"__dc_{c}__"))
+
+    row = df.agg(*agg_exprs).collect()[0]
+    row_count = row["__row_count__"]
+
     if row_count == 0:
         return {
             "row_count": 0,
@@ -45,29 +70,12 @@ def profile_dataframe(df: "DataFrame", sample_n: int | None = None) -> dict[str,
             "distinct_counts": {c: 0 for c in columns},
         }
 
-    if sample_n and sample_n < row_count:
-        sample = df.sample(fraction=sample_n / row_count, seed=42)
-        sample_count = sample_n
-    else:
-        sample = df
-        sample_count = row_count
-
-    def _null_or_empty(col_name: str):
-        cond = F.col(col_name).isNull()
-        if isinstance(sample.schema[col_name].dataType, StringType):
-            cond = cond | (F.col(col_name) == "")
-        return cond
-
-    null_rates = {
-        c: sample.filter(_null_or_empty(c)).count() / max(sample_count, 1)
-        for c in sample.columns
-    }
-
-    distinct_counts = {c: sample.select(c).distinct().count() for c in sample.columns}
+    null_rates = {c: row[f"__null_{c}__"] / row_count for c in columns}
+    distinct_counts = {c: row[f"__dc_{c}__"] for c in columns}
 
     return {
         "row_count": row_count,
-        "columns": sample.columns,
+        "columns": columns,
         "null_rates": null_rates,
         "distinct_counts": distinct_counts,
     }

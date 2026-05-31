@@ -76,11 +76,13 @@ Non-obvious design tradeoffs captured during the 4-day build. Each ADR follows t
 
 **Context.** Bronze receives raw parquet from an upstream source we don't control. The brief asks for self-healing — but auto-applying schema changes silently in Bronze would defeat the agent's purpose (no failure means nothing to heal).
 
-**Decision.** Bronze uses a static schema. Any drift fails the run and writes an audit record. The supervising agent decides whether the drift is a safe addition (auto-patch the schema) or a logic change (escalate).
+**Decision.** Bronze uses a static schema with `cloudFiles.schemaEvolutionMode = "rescue"`. Drifted columns land in `_rescued_data` for forensic visibility. A post-write check raises if any rows in the current run's batch have non-null `_rescued_data`, causing the JobRun to fail so the supervising agent has a real failure to diagnose. The audit row is written *before* the raise so the agent has full drift context (rescued row count + sample rescued values) when it polls for failures.
 
 **Consequences.**
 - Bronze is brittle by design. That brittleness is what makes the agent's value visible.
-- Auto Loader's `schemaEvolutionMode = "rescue"` captures drifted columns into `_rescued_data` for forensic visibility.
+- Drift data is preserved (in `_rescued_data`) rather than lost, so the agent can propose informed schema patches.
+- The drift detection is scoped to `_ingest_ts >= RUN_START` so a single bad batch doesn't cause every future run to fail forever — once the schema is patched, subsequent runs are clean.
+- The earlier `validate_schema_columns` check stays as a tripwire for the case where someone later removes the static `.schema()` declaration. Under the current code it can't fire.
 
 ---
 
@@ -94,7 +96,7 @@ Non-obvious design tradeoffs captured during the 4-day build. Each ADR follows t
 **Decision.** Persistent hash-keyed cache in `silver._extraction_cache` keyed by `(md5_of_concatenated_message_bodies, prompt_version)`. Every Silver run computes the hash per conversation; if the hash matches what's already cached, we skip the Gemini call entirely and read the cached extraction. New conversations and changed conversations get a fresh call.
 
 **Consequences.**
-- First full run touches all 15,000 conversations (~5 hours under free-tier limits with batching).
+- First full run touches all 15,000 conversations (~25 min wall-clock: 15k / 50 per batch ≈ 300 Gemini calls × ~5s, well under the 1,500-RPD free-tier cap).
 - Incremental runs only touch new/changed conversations — sub-minute typical refresh.
 - `prompt_version` in the cache key means changing the extraction prompt triggers a full re-extract on next run (intentional).
 - Cache table is part of the Silver schema so it lives in Unity Catalog, with all the lineage and access controls that come with it.
